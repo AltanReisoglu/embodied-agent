@@ -24,6 +24,7 @@ from embodied_agent.memory import Memory  # noqa: E402
 from embodied_agent.reasoner.hf_chat import HFReasoner  # noqa: E402
 from embodied_agent.tools.builtin import build_registry  # noqa: E402
 from embodied_agent.trace import Trace  # noqa: E402
+from embodied_agent.verifier import PreconditionVerifier  # noqa: E402
 
 DEFAULT_TASK = "Put the red cube on the blue plate."
 
@@ -55,7 +56,12 @@ def main() -> int:
     parser.add_argument("--provider", default=os.environ.get("HF_PROVIDER"))
     parser.add_argument("--json-mode", action="store_true", help="no native tool calling")
     parser.add_argument("--privileged", action="store_true", help="enable list_objects")
-    parser.add_argument("--image-window", type=int, default=3)
+    parser.add_argument("--image-window", type=int, default=2)
+    parser.add_argument(
+        "--no-verifier",
+        action="store_true",
+        help="disable pre-execution checks (an ablation, not a normal setting)",
+    )
     parser.add_argument("--no-grid", action="store_true", help="do not overlay a pixel grid")
     parser.add_argument("--reasoning-effort", default=None)
     parser.add_argument("--seed", type=int, default=None)
@@ -77,6 +83,7 @@ def main() -> int:
     print(f"task:    {args.task}")
     print(f"trace:   {trace.dir}")
     print(f"tools:   {', '.join(t.name for t in registry.available())}")
+    print(f"verifier: {'off (ablation)' if args.no_verifier else 'on'}")
 
     try:
         summary = run_episode(
@@ -91,6 +98,7 @@ def main() -> int:
             pixel_grid=not args.no_grid,
             json_mode=args.json_mode,
             success_check=cube_on_plate,
+            verifier=None if args.no_verifier else PreconditionVerifier(env),
         )
     finally:
         env.close()

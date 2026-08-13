@@ -46,6 +46,7 @@ class Trace:
         self.steps: list[StepRecord] = []
         self._redundant: list[str] = []
         self._errors: list[str] = []
+        self._rejections: list[str] = []
 
     # ------------------------------------------------------------------ recording
 
@@ -69,6 +70,11 @@ class Trace:
         result text -- a tool that explains a problem in prose is still a failed call."""
         self._errors.append(tool_name)
 
+    def note_verifier_rejection(self, tool_name: str) -> None:
+        """A proposal caught before execution. In HumanCLAW's ablation the verifier was
+        the decisive component, so how often it fires is worth watching directly."""
+        self._rejections.append(tool_name)
+
     # -------------------------------------------------------------------- metrics
 
     def metrics(self) -> dict[str, Any]:
@@ -80,6 +86,8 @@ class Trace:
             "tool_calls_by_name": dict(by_tool),
             "tool_errors": len(self._errors),
             "tool_errors_by_name": dict(Counter(self._errors)),
+            "verifier_rejections": len(self._rejections),
+            "verifier_rejections_by_name": dict(Counter(self._rejections)),
             # Act Wisely (arXiv 2604.08545): tracked explicitly because it degrades quietly.
             "redundant_tool_calls": len(self._redundant),
             "redundant_rate": round(len(self._redundant) / len(calls), 3) if calls else 0.0,

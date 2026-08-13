@@ -18,6 +18,7 @@ from embodied_agent.reasoner.prompts import JSON_MODE_SUFFIX, system_prompt
 from embodied_agent.state import state_block
 from embodied_agent.tools.registry import Registry, ToolResult
 from embodied_agent.trace import StepRecord, Trace, classify_failure
+from embodied_agent.verifier import Verifier
 
 #: Perception tools are side-effect free, so repeating one with identical arguments
 #: while the world has not changed produces no new information.
@@ -55,10 +56,13 @@ def run_episode(
     task: str,
     max_steps: int = 15,
     trace: Trace | None = None,
-    image_window: int = 3,
+    # HumanCLAW's ablation: 1 image scores best, 2 is comparable, and 10 collapses
+    # NavSR from 27% to 13%. More visual context is actively worse, so keep this small.
+    image_window: int = 2,
     pixel_grid: bool = True,
     json_mode: bool = False,
     success_check: SuccessCheck | None = None,
+    verifier: Verifier | None = None,
     verbose: bool = True,
 ) -> dict[str, Any]:
     prompt = system_prompt() + (JSON_MODE_SUFFIX if json_mode else "")
@@ -105,6 +109,21 @@ def run_episode(
             if redundancy.is_redundant(call.name, call.arguments):
                 if trace:
                     trace.note_redundant(call.name)
+
+            # Verify before executing. A rejected proposal never runs; the reason goes
+            # back as the tool result so the step is spent correcting rather than on a
+            # motion that could not have worked.
+            if verifier is not None:
+                verdict = verifier.check(call, obs)
+                if not verdict.accept:
+                    text = f"rejected before execution: {verdict.reason}"
+                    record.tool_results.append(text)
+                    _append_tool_result(history, call.id, text, json_mode)
+                    if trace:
+                        trace.note_verifier_rejection(call.name)
+                    if verbose:
+                        print(f"    -x {text[:150]}")
+                    continue
 
             result: ToolResult = registry.dispatch(call)
             record.tool_results.append(result.text)

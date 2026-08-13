@@ -19,24 +19,62 @@ result and goes again.
 
 ## Why it is built this way
 
-Three design choices are countermeasures to published failure modes, not preferences.
+Four design choices are countermeasures to published failure modes, not preferences.
 Each is marked in the code where it appears.
 
-**The model is told its own body state; it never infers it from pixels.**
-[HumanCLAW](https://arxiv.org/abs/2607.27180) evaluated exactly this architecture — an
-off-the-shelf VLM issuing skill commands that a controller executes — over 1,218 episodes
-and nine frontier VLMs. The best scored 16.8%. The bottleneck was not perception: up to
-81% of interaction-stage failures came from egocentric self-localisation and body
-awareness, i.e. the model could not tell where its body was, whether it had arrived, or
-whether it had collided. So every observation leads with a measured `BODY STATE` block
-(`src/embodied_agent/state.py`), and skills report what actually happened rather than
-returning a success flag (`SkillResult`).
+**Proposed actions are verified before they execute.**
+This is the single highest-leverage component in [HumanCLAW](https://arxiv.org/abs/2607.27180)'s
+harness. Their ablation removes only the verifier:
 
-**Memory lives outside the context window.**
+| | FindSR | NavSR | InteractSR |
+|---|---|---|---|
+| baseline | 58.0% | 27.0% | 18.9% |
+| no verifier | 51.0% | **2.0%** | **0.0%** |
+
+Seeing barely moves; acting collapses. Their reasoning is that VLM spatial judgement
+degrades as the rollout grows, so the planner starts hallucinating progress — claiming it
+reached something still far away. `verifier.py` checks each proposal against the body's
+actual state and rejects it *without executing*, returning the reason as the tool result.
+Unlike theirs, most checks are exact code rather than a second model call: reachability is
+decided by running IK on a scratch copy, so a waypoint outside the workspace costs a
+correction instead of a wasted motion. It also guards termination — `done(success=true)`
+while still holding the object is rejected, because that is the goal-detection failure in
+its purest form.
+
+**The model is told its own body state; it never infers it from pixels.**
+HumanCLAW ran 1,218 episodes across nine frontier VLMs; the best scored 16.8%. The
+bottleneck was not perception — once a target was genuinely visible, the strongest model's
+reported sighting rate came within 5 points of ground truth. Failures concentrated after
+seeing: body awareness underlies 34% of navigation failures and **81%** of interaction
+failures. Their own limitations section names the likely cause:
+
+> the agent receives only egocentric RGB and text history, with no proprioceptive body
+> state or contact signal … a body-state or contact signal could be the missing input
+> rather than a missing faculty.
+
+That input is exactly what `state.py` supplies and what `SkillResult` measures, so this
+repo is a direct test of the question their paper leaves open.
+
+**Memory lives outside the context window — and stays short.**
 [VISTA](https://vista-research.github.io/) notes that a VLM's native memory is the KV
 cache: attended over only implicitly, compressed, lossy, short-horizon. Once old frames
 are dropped to bound the context, whatever they taught is gone. `memory.py` is a small
 explicit store, re-rendered verbatim into every step.
+
+Small is the operative word, and it is counterintuitive. HumanCLAW's ablation shows both
+kinds of context saturating and then *hurting*:
+
+| text history | 0 | 10 | 20 | 50 | 100 |
+|---|---|---|---|---|---|
+| InteractSR | 0.0% | **18.9%** | 7.5% | 7.5% | 11.3% |
+
+| images in context | 1 | 2 | 5 | 10 |
+|---|---|---|---|---|
+| NavSR | **27.0%** | 31.0% | 28.0% | 13.0% |
+| InteractSR | **18.9%** | 9.4% | 7.5% | 3.8% |
+
+Some history is necessary — with none, interaction success is zero — but more is worse.
+Hence `image_window` defaults to 2 and the memory block shows the last 8 actions.
 
 **Tool descriptions say when *not* to call.**
 [Act Wisely](https://arxiv.org/abs/2604.08545) found agentic multimodal models invoke
@@ -76,7 +114,8 @@ identical dispatcher.
 
 Useful flags: `--privileged` enables `list_objects` (ground-truth poses — good for
 bootstrapping, bypasses vision, so keep it off when measuring), `--steps N`,
-`--image-window N`, `--no-grid`, `--randomize`.
+`--image-window N`, `--no-grid`, `--randomize`, and `--no-verifier` to reproduce
+HumanCLAW's ablation on your own model.
 
 ## What is measured
 
@@ -88,6 +127,7 @@ bootstrapping, bypasses vision, so keep it off when measuring), `--steps N`,
 | `verified_success` | ground-truth check against object poses |
 | `failure_kind` | HumanCLAW-style bucket: localisation / body_awareness / goal_detection / interaction |
 | `redundant_rate` | repeat perception calls ÷ total calls (Act Wisely) |
+| `verifier_rejections` | proposals caught before execution, by tool |
 
 An agent that calls `done(success=true)` having achieved nothing is a goal-detection
 failure, and it is only visible because the two fields are kept apart.
@@ -98,7 +138,7 @@ failure, and it is only visible because the two fields are kept apart.
 pytest
 ```
 
-35 tests, no API key needed — a scripted reasoner stands in for the model, so the loop
+46 tests, no API key needed — a scripted reasoner stands in for the model, so the loop
 (including the closing of it) is verified without touching a provider.
 
 ## Layout
@@ -109,6 +149,7 @@ pytest
 | `skills/ik.py` | damped least-squares IK, gripper held pointing down |
 | `perception/` | frame encoding, pixel grid overlay, crop/zoom |
 | `state.py` | the body-state block |
+| `verifier.py` | pre-execution checks on proposed calls |
 | `memory.py` | external lossless memory |
 | `reasoner/` | HF Inference client, `<think>` extraction, prompts |
 | `tools/` | schemas and dispatch |
