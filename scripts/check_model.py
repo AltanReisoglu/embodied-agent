@@ -28,6 +28,22 @@ from embodied_agent.reasoner.hf_chat import ACTION_SCHEMA, HF_ROUTER_BASE_URL  #
 
 PASS, FAIL, WARN = "\033[32mPASS\033[0m", "\033[31mFAIL\033[0m", "\033[33mWARN\033[0m"
 
+#: Candidates for the reasoner, best fit first. Serving coverage on HF Inference varies
+#: by model *and* provider and changes over time, so this is a list to try rather than a
+#: recommendation -- run `--shortlist` and take the first one that passes.
+SHORTLIST = [
+    # Purpose-built physical-reasoning VLMs: long chain-of-thought over images, plus 2D/3D
+    # point localisation and trajectory output, which is exactly what measure()/move_to()
+    # consume. Tool-calling support is the open question.
+    "nvidia/Cosmos-Reason2-8B",
+    "nvidia/Cosmos-Reason2-2B",
+    # Advertises native tool use alongside vision -- the combination the loop needs.
+    "zai-org/GLM-4.6V",
+    # Broad provider coverage; strong GUI/agent posture in the family.
+    "Qwen/Qwen3-VL-32B-Instruct",
+    "Qwen/Qwen3-VL-8B-Instruct",
+]
+
 PROBE_TOOL = [
     {
         "type": "function",
@@ -154,34 +170,57 @@ def check_json_schema(client, model) -> bool:
         return False
 
 
+def probe_one(client, model: str) -> tuple[bool, str | None]:
+    """Returns (usable, recommended_mode)."""
+    vision = check_vision(client, model)
+    tools = check_tools(client, model)
+    schema = check_json_schema(client, model)
+
+    if not vision:
+        return False, None
+    if tools:
+        return True, "tools"
+    if schema:
+        return True, "json_mode"
+    return False, None
+
+
 def main() -> int:
     load_dotenv()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default=os.environ.get("HF_MODEL", "Qwen/Qwen3-VL-8B-Instruct"))
     parser.add_argument("--provider", default=os.environ.get("HF_PROVIDER"))
     parser.add_argument("--base-url", default=os.environ.get("HF_BASE_URL"))
+    parser.add_argument(
+        "--shortlist",
+        action="store_true",
+        help="probe the built-in candidate models and report the first usable one",
+    )
     args = parser.parse_args()
 
     client, url = make_client(args)
-    print(f"model:    {args.model}")
     print(f"endpoint: {url}\n")
 
-    vision = check_vision(client, args.model)
-    tools = check_tools(client, args.model)
-    schema = check_json_schema(client, args.model)
+    models = SHORTLIST if args.shortlist else [args.model]
+    results: list[tuple[str, str]] = []
 
-    print()
-    if not vision:
-        print("This model cannot be used: the loop needs image input.")
+    for model in models:
+        print(f"--- {model}")
+        usable, mode = probe_one(client, model)
+        if usable and mode:
+            results.append((model, mode))
+        print()
+
+    if not results:
+        print("Nothing usable. The loop needs image input plus either tool calling or "
+              "structured output. Try --provider <name> to pin a different serving "
+              "provider, or another model.")
         return 1
-    if tools:
-        print("Recommended: run with the default 'tools' mode.")
-    elif schema:
-        print("Recommended: run with --json-mode (no native tool calling on this provider).")
-    else:
-        print("Neither tool calling nor structured output worked. Try another provider "
-              "with --provider, or another model.")
-        return 1
+
+    model, mode = results[0]
+    print(f"Use: HF_MODEL={model}" + ("  (add --json-mode)" if mode == "json_mode" else ""))
+    if len(results) > 1:
+        print("Also usable: " + ", ".join(f"{m} [{k}]" for m, k in results[1:]))
     return 0
 
 

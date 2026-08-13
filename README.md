@@ -60,7 +60,8 @@ cp .env.example .env      # add your HF_TOKEN
 
 ```bash
 # 1. Does this model/provider actually do vision + tool calling?
-python scripts/check_model.py
+python scripts/check_model.py --shortlist   # probes the candidates, prints the winner
+python scripts/check_model.py --model <id>  # or check one
 
 # 2. One episode.
 python scripts/run_episode.py --task "Put the red cube on the blue plate."
