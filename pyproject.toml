@@ -1,0 +1,28 @@
+[project]
+name = "embodied-agent"
+version = "0.1.0"
+description = "Perceive-reason-act loop: a VLM reasons over MuJoCo camera frames and acts through skill tools"
+requires-python = ">=3.10"
+dependencies = [
+    "mujoco>=3.2",
+    "numpy>=1.26",
+    "pillow>=10.0",
+    "openai>=1.60",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+embodied_agent = ["assets/*.xml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

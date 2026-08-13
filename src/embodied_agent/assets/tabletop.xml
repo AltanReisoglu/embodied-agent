@@ -1,0 +1,143 @@
+<mujoco model="tabletop">
+  <compiler angle="radian" autolimits="true"/>
+  <option timestep="0.002" integrator="implicitfast"/>
+
+  <visual>
+    <global offwidth="640" offheight="480"/>
+    <headlight ambient="0.4 0.4 0.4" diffuse="0.7 0.7 0.7"/>
+    <quality shadowsize="2048"/>
+  </visual>
+
+  <asset>
+    <texture name="grid" type="2d" builtin="checker" rgb1="0.20 0.25 0.30" rgb2="0.25 0.30 0.35"
+             width="300" height="300"/>
+    <material name="grid" texture="grid" texrepeat="6 6" reflectance="0.05"/>
+    <material name="table" rgba="0.72 0.62 0.48 1"/>
+    <material name="metal" rgba="0.28 0.30 0.36 1"/>
+  </asset>
+
+  <default>
+    <geom solref="0.004 1" friction="1 0.05 0.01"/>
+    <default class="arm">
+      <joint type="hinge" damping="8" armature="0.1"/>
+      <geom type="capsule" material="metal" mass="0.6"/>
+      <position kp="400" kv="40" forcerange="-150 150"/>
+    </default>
+    <default class="finger">
+      <joint type="slide" damping="20" armature="0.01"/>
+      <geom type="box" rgba="0.12 0.12 0.15 1" mass="0.05"
+            friction="2.5 0.2 0.01" solimp="0.97 0.995 0.001"/>
+    </default>
+    <default class="object">
+      <geom mass="0.05" friction="1.5 0.1 0.01" solimp="0.97 0.995 0.001"/>
+    </default>
+  </default>
+
+  <worldbody>
+    <light pos="0.3 -0.4 1.6" dir="-0.2 0.3 -1" diffuse="0.8 0.8 0.8"/>
+    <geom name="floor" type="plane" size="3 3 0.05" material="grid"/>
+
+    <geom name="table" type="box" size="0.55 0.55 0.2" pos="0 0.1 0.2" material="table"/>
+
+    <!-- Near-overhead observation camera aimed at the workspace centre (0, 0.19, 0.42).
+         A lower, head-on viewpoint puts the arm between the lens and the objects, which
+         occludes most of the scene; from up here the arm parks in one corner instead. -->
+    <camera name="front" pos="0 -0.05 1.25" xyaxes="1 0 0  0 0.961 0.278" fovy="50"/>
+
+    <body name="base" pos="0 -0.15 0.4">
+      <geom type="cylinder" size="0.055 0.03" pos="0 0 0.03" material="metal" mass="2"/>
+
+      <body name="link1" pos="0 0 0.06" gravcomp="1">
+        <joint name="joint1" class="arm" axis="0 0 1" range="-3.1 3.1"/>
+        <geom class="arm" fromto="0 0 0  0 0 0.08" size="0.042"/>
+
+        <body name="link2" pos="0 0 0.08" gravcomp="1">
+          <joint name="joint2" class="arm" axis="1 0 0" range="-2.2 2.2"/>
+          <geom class="arm" fromto="0 0 0  0 0 0.26" size="0.036"/>
+
+          <body name="link3" pos="0 0 0.26" gravcomp="1">
+            <joint name="joint3" class="arm" axis="1 0 0" range="-2.7 2.7"/>
+            <geom class="arm" fromto="0 0 0  0 0 0.24" size="0.030"/>
+
+            <body name="link4" pos="0 0 0.24" gravcomp="1">
+              <joint name="joint4" class="arm" axis="1 0 0" range="-2.2 2.2"/>
+              <geom class="arm" fromto="0 0 0  0 0 0.06" size="0.026"/>
+
+              <body name="wrist" pos="0 0 0.06" gravcomp="1">
+                <joint name="joint5" class="arm" axis="0 0 1" range="-3.1 3.1"/>
+                <geom type="box" size="0.032 0.024 0.02" pos="0 0 0.02" material="metal" mass="0.2"/>
+
+                <!-- Grasp centre: between the fingertips. IK targets this site. -->
+                <site name="ee_site" pos="0 0 0.085" size="0.007" rgba="1 0.2 0.2 0.4"/>
+                <camera name="wrist" pos="0 -0.07 0.03" xyaxes="1 0 0  0 0.45 0.89" fovy="70"/>
+
+                <body name="finger_left" pos="0 0 0.04" gravcomp="1">
+                  <joint name="finger_left" class="finger" axis="0 1 0" range="0 0.04"/>
+                  <geom class="finger" name="fingerpad_left" size="0.008 0.008 0.03" pos="0 0.012 0.03"/>
+                </body>
+                <body name="finger_right" pos="0 0 0.04" gravcomp="1">
+                  <joint name="finger_right" class="finger" axis="0 -1 0" range="0 0.04"/>
+                  <geom class="finger" name="fingerpad_right" size="0.008 0.008 0.03" pos="0 -0.012 0.03"/>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+
+    <body name="red_cube" pos="0.13 0.18 0.42">
+      <freejoint name="red_cube"/>
+      <geom class="object" name="red_cube" type="box" size="0.02 0.02 0.02" rgba="0.85 0.15 0.12 1"/>
+    </body>
+
+    <body name="green_cube" pos="-0.16 0.26 0.42">
+      <freejoint name="green_cube"/>
+      <geom class="object" name="green_cube" type="box" size="0.02 0.02 0.02" rgba="0.20 0.70 0.25 1"/>
+    </body>
+
+    <body name="blue_plate" pos="-0.02 0.30 0.408">
+      <freejoint name="blue_plate"/>
+      <geom class="object" name="blue_plate" type="cylinder" size="0.06 0.008"
+            rgba="0.20 0.35 0.85 1" mass="0.3"/>
+    </body>
+  </worldbody>
+
+  <!-- Adjacent links overlap by construction; without these the permanent contact
+       between a link and its parent applies friction that locks the joint. -->
+  <contact>
+    <exclude body1="base" body2="link1"/>
+    <exclude body1="link1" body2="link2"/>
+    <exclude body1="link2" body2="link3"/>
+    <exclude body1="link3" body2="link4"/>
+    <exclude body1="link4" body2="wrist"/>
+    <exclude body1="wrist" body2="finger_left"/>
+    <exclude body1="wrist" body2="finger_right"/>
+    <exclude body1="finger_left" body2="finger_right"/>
+  </contact>
+
+  <!-- One control drives both fingers symmetrically. -->
+  <equality>
+    <joint joint1="finger_left" joint2="finger_right" polycoef="0 1 0 0 0"/>
+  </equality>
+
+  <actuator>
+    <position class="arm" name="joint1" joint="joint1"/>
+    <position class="arm" name="joint2" joint="joint2"/>
+    <position class="arm" name="joint3" joint="joint3"/>
+    <position class="arm" name="joint4" joint="joint4"/>
+    <position class="arm" name="joint5" joint="joint5"/>
+    <position name="gripper" joint="finger_left" kp="120" kv="8"
+              ctrlrange="0 0.04" forcerange="-40 40"/>
+  </actuator>
+
+  <!-- Home parks the arm at the near-left edge of the frame so it never occludes the
+       objects, while the gripper stays visible for the model to see its own body. -->
+  <keyframe>
+    <key name="home" qpos="0.909 -0.147 -1.561 -1.432 0.908 0.04 0.04
+                           0.13 0.18 0.42 1 0 0 0
+                           -0.16 0.26 0.42 1 0 0 0
+                           -0.02 0.30 0.408 1 0 0 0"
+              ctrl="0.909 -0.147 -1.561 -1.432 0.908 0.04"/>
+  </keyframe>
+</mujoco>
