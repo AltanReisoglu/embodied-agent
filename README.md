@@ -117,6 +117,33 @@ bootstrapping, bypasses vision, so keep it off when measuring), `--steps N`,
 `--image-window N`, `--no-grid`, `--randomize`, and `--no-verifier` to reproduce
 HumanCLAW's ablation on your own model.
 
+## Evaluating a harness honestly
+
+[Rethinking the Evaluation of Harness Evolution](https://arxiv.org/abs/2607.12227) (AI2 +
+UW) showed that published gains from evolving an agent's harness mostly survive neither of
+two controls. On Terminal-Bench 2.1, harness evolution scored *below* the unmodified
+baseline without unit tests (67.4 vs 68.2) while plain parallel sampling reached 72.3; and
+on tasks disjoint from the ones it was tuned on it transferred +0.6 points on average, and
++0.0 on GPT-5.4. Their diagnosis: the edits memorise fixes rather than distil strategies.
+
+Their closing conditions are also why measuring this domain is worth doing. Harness
+evolution should matter where there is real headroom *and* performance genuinely depends
+on the harness — Terminal-Bench met neither ("a shell tool and a basic prompt already
+suffices"). Embodied manipulation meets both: HumanCLAW's best model reached 16.8%, and
+removing one harness component took interaction success from 18.9% to 0%.
+
+So `bench.py` builds in both controls:
+
+```bash
+python scripts/bench.py --split test --seeds 3 --budget 3   # held-out, pass@1 vs pass@3
+python scripts/bench.py --split test --seeds 3 --no-verifier # the ablation
+```
+
+`tasks.py` holds 8 tasks split 4 train / 4 test, disjoint, with seeded layout variation so
+a policy cannot pass on memorised coordinates. Every number is reported per split, and
+pass@1 always sits next to pass@k at the same budget: a change that moves pass@1 but not
+pass@k bought retries, not capability.
+
 ## What is measured
 
 `runs/<ts>/summary.json` separates what the agent *claimed* from what the world *shows*:
@@ -128,6 +155,7 @@ HumanCLAW's ablation on your own model.
 | `failure_kind` | HumanCLAW-style bucket: localisation / body_awareness / goal_detection / interaction |
 | `redundant_rate` | repeat perception calls ÷ total calls (Act Wisely) |
 | `verifier_rejections` | proposals caught before execution, by tool |
+| `overclaim_rate` | attempts claiming success the world does not support |
 
 An agent that calls `done(success=true)` having achieved nothing is a goal-detection
 failure, and it is only visible because the two fields are kept apart.
@@ -138,7 +166,7 @@ failure, and it is only visible because the two fields are kept apart.
 pytest
 ```
 
-46 tests, no API key needed — a scripted reasoner stands in for the model, so the loop
+56 tests, no API key needed — a scripted reasoner stands in for the model, so the loop
 (including the closing of it) is verified without touching a provider.
 
 ## Layout
@@ -156,6 +184,8 @@ pytest
 | `history.py` | message list with a bounded image window |
 | `loop.py` | the loop itself |
 | `trace.py` | recording and metrics |
+| `tasks.py` | task family with a held-out split |
+| `bench.py` | benchmark runner, pass@1 vs pass@k |
 
 ## Notes on the API
 

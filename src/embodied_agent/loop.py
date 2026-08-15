@@ -63,13 +63,16 @@ def run_episode(
     json_mode: bool = False,
     success_check: SuccessCheck | None = None,
     verifier: Verifier | None = None,
+    # The benchmark places objects for a specific task and seed before calling in, so it
+    # must be able to keep that arrangement rather than have it reset out from under it.
+    reset_env: bool = True,
     verbose: bool = True,
 ) -> dict[str, Any]:
     prompt = system_prompt() + (JSON_MODE_SUFFIX if json_mode else "")
     history = History(prompt, image_window=image_window)
     redundancy = RedundancyDetector()
 
-    obs = env.reset()
+    obs = env.reset() if reset_env else env.observe()
     _post_observation(history, obs, memory, task, max_steps, pixel_grid, first=True)
     if trace:
         trace.save_frame(0, obs.rgb)
