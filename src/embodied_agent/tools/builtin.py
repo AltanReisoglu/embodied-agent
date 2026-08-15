@@ -16,6 +16,7 @@ import numpy as np
 from embodied_agent.envs.mujoco_tabletop import TabletopEnv
 from embodied_agent.memory import Memory
 from embodied_agent.perception.render import crop_and_upscale
+from embodied_agent.progress import Progress
 from embodied_agent.tools.registry import Registry, Tool, ToolResult
 
 
@@ -27,6 +28,7 @@ def build_registry(
     env: TabletopEnv,
     memory: Memory,
     *,
+    progress: Progress | None = None,
     allow_privileged: bool = False,
 ) -> Registry:
     registry = Registry(allow_privileged=allow_privileged)
@@ -265,6 +267,42 @@ def build_registry(
             fn=done,
         )
     )
+
+    # -------------------------------------------------------------------- progress
+
+    # EvoHarness-RL's `commit`: the one verb that writes to Progress. Their ablation
+    # (arXiv 2608.05446) shows removing this component costs most on multi-step tasks
+    # with dependent sub-goals, which is what the held-out split here is made of.
+    if progress is not None:
+
+        def commit(subgoal: str) -> ToolResult:
+            return ToolResult(progress.commit(str(subgoal)))
+
+        registry.register(
+            Tool(
+                name="commit",
+                description=(
+                    "Register the ONE subgoal you are working on now, in a few words -- "
+                    "e.g. 'pick up the red cube'. Committing the next subgoal marks the "
+                    "current one finished, so call it at the start of the task and each "
+                    "time you move on to the next step. Your committed plan is shown to "
+                    "you every step, along with which subgoal a failed action blocked. Do "
+                    "NOT re-commit the subgoal you are already on -- it tells you nothing "
+                    "and costs a step."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "subgoal": {
+                            "type": "string",
+                            "description": "The single step you are starting now.",
+                        }
+                    },
+                    "required": ["subgoal"],
+                },
+                fn=commit,
+            )
+        )
 
     # ---------------------------------------------------------------------- memory
 

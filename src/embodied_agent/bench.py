@@ -26,6 +26,7 @@ from typing import Any
 from embodied_agent.envs.mujoco_tabletop import TabletopEnv
 from embodied_agent.loop import run_episode
 from embodied_agent.memory import Memory
+from embodied_agent.progress import Progress
 from embodied_agent.reasoner.base import Reasoner
 from embodied_agent.tasks import Task, prepare
 from embodied_agent.tools.builtin import build_registry
@@ -50,6 +51,7 @@ class Attempt:
     tool_errors: int
     verifier_rejections: int
     redundant_calls: int
+    progress_commits: int = 0
 
 
 @dataclass
@@ -104,6 +106,14 @@ class BenchReport:
                 "verifier_rejections": sum(a.verifier_rejections for a in rows),
                 "redundant_calls": sum(a.redundant_calls for a in rows),
                 "tool_errors": sum(a.tool_errors for a in rows),
+                # EvoHarness-RL's annealed policy settles near one harness call per
+                # episode; a much higher rate here means the plan is being rewritten
+                # rather than followed.
+                "commits_per_episode": round(
+                    sum(a.progress_commits for a in rows) / len(rows), 2
+                )
+                if rows
+                else 0.0,
             }
         return out
 
@@ -135,6 +145,7 @@ def run_benchmark(
     seeds: list[int],
     budget: int = 1,
     use_verifier: bool = True,
+    use_progress: bool = True,
     max_steps: int = 15,
     image_window: int = 2,
     json_mode: bool = False,
@@ -147,6 +158,7 @@ def run_benchmark(
         "seeds": seeds,
         "budget": budget,
         "use_verifier": use_verifier,
+        "use_progress": use_progress,
         "max_steps": max_steps,
         "image_window": image_window,
         "privileged": privileged,
@@ -159,7 +171,10 @@ def run_benchmark(
             for seed in seeds:
                 for attempt_index in range(budget):
                     memory = Memory()
-                    registry = build_registry(env, memory, allow_privileged=privileged)
+                    progress = Progress() if use_progress else None
+                    registry = build_registry(
+                        env, memory, progress=progress, allow_privileged=privileged
+                    )
                     trace = (
                         Trace(root=trace_root, task=task.instruction, model=str(config))
                         if trace_root
@@ -182,6 +197,7 @@ def run_benchmark(
                         json_mode=json_mode,
                         success_check=task.verify,
                         verifier=PreconditionVerifier(env) if use_verifier else None,
+                        progress=progress,
                         verbose=verbose,
                         reset_env=False,
                     )
@@ -201,6 +217,7 @@ def run_benchmark(
                             tool_errors=int(summary.get("tool_errors", 0)),
                             verifier_rejections=int(summary.get("verifier_rejections", 0)),
                             redundant_calls=int(summary.get("redundant_tool_calls", 0)),
+                            progress_commits=int(summary.get("progress_commits", 0)),
                         )
                     )
                     if verbose:

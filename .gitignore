@@ -6,3 +6,7 @@ venv/
 .pytest_cache/
 .env
 runs/
+
+# klonlanan yardimci repolar (public repoya girmesin)
+yardimci-repolar/
+sourcesbtw/

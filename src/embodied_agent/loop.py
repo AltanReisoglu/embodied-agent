@@ -13,6 +13,7 @@ from embodied_agent.envs.mujoco_tabletop import TabletopEnv
 from embodied_agent.history import History
 from embodied_agent.memory import Memory
 from embodied_agent.perception.render import draw_pixel_grid
+from embodied_agent.progress import Progress
 from embodied_agent.reasoner.base import AgentStep, Reasoner
 from embodied_agent.reasoner.prompts import JSON_MODE_SUFFIX, system_prompt
 from embodied_agent.state import state_block
@@ -63,6 +64,9 @@ def run_episode(
     json_mode: bool = False,
     success_check: SuccessCheck | None = None,
     verifier: Verifier | None = None,
+    # EvoHarness-RL's Progress (arXiv 2608.05446). Optional so an episode can be run
+    # without it, which is what makes the component ablatable the way their table is.
+    progress: Progress | None = None,
     # The benchmark places objects for a specific task and seed before calling in, so it
     # must be able to keep that arrangement rather than have it reset out from under it.
     reset_env: bool = True,
@@ -73,7 +77,7 @@ def run_episode(
     redundancy = RedundancyDetector()
 
     obs = env.reset() if reset_env else env.observe()
-    _post_observation(history, obs, memory, task, max_steps, pixel_grid, first=True)
+    _post_observation(history, obs, memory, task, max_steps, pixel_grid, progress, first=True)
     if trace:
         trace.save_frame(0, obs.rgb)
 
@@ -142,6 +146,10 @@ def run_episode(
             if result.mutates_world:
                 world_changed = True
                 redundancy.world_changed()
+                # The environment adapter's job: sub-goal status comes from the measured
+                # outcome of a skill, never from the model's own account of it.
+                if progress is not None:
+                    progress.note_action(not result.is_error, result.text.splitlines()[0])
             if call.name == "done" and not result.is_error:
                 claimed_success = bool(call.arguments.get("success", False))
                 claimed_reason = str(call.arguments.get("reason", ""))
@@ -151,7 +159,7 @@ def run_episode(
             obs = env.observe()
             if trace:
                 record.frame = trace.save_frame(step, obs.rgb)
-            _post_observation(history, obs, memory, task, max_steps, pixel_grid)
+            _post_observation(history, obs, memory, task, max_steps, pixel_grid, progress)
         for caption, image in pending_images:
             history.add_user(f"Requested view: {caption}", _maybe_grid(image, pixel_grid))
 
@@ -175,6 +183,9 @@ def run_episode(
         "agent_reason": claimed_reason,
         "verified_success": verified,
         "verifier_verdict": verdict,
+        # EvoHarness-RL's harness annealing: after training their agent settles at about
+        # one harness call per episode. We cannot train, but we can measure the rate.
+        "progress_commits": progress.commits if progress is not None else 0,
     }
     if trace:
         summary = trace.finish(
@@ -199,10 +210,14 @@ def _post_observation(
     task: str,
     max_steps: int,
     pixel_grid: bool,
+    progress: Progress | None = None,
     *,
     first: bool = False,
 ) -> None:
-    """Deliver one observation: body state, memory, then the image.
+    """Deliver one observation: body state, plan, memory, then the image.
+
+    The three text blocks are EvoHarness-RL's H_t = (Belief, Progress, Experience)
+    rendered together, which is how their harness presents external state to the policy.
 
     A `role:"tool"` message cannot carry an image on this API, so the frame that results
     from an action must arrive as a user message. Skipping it is what leaves an agent
@@ -210,6 +225,8 @@ def _post_observation(
     """
     header = f"TASK: {task}\n\n" if first else ""
     text = header + state_block(obs, task=None if first else task, max_steps=max_steps)
+    if progress is not None:
+        text += "\n\n" + progress.render()
     text += "\n\n" + memory.render()
     if not first:
         text += "\n\nThis image is the result of your last action."

@@ -6,10 +6,11 @@ result and goes again.
 
 ```
                     ┌──────────────── System 2 · ~0.3–1 Hz ────────────────┐
-   body state ─────▶│  VLM (HF Inference)   think → choose tools → args    │
+   body state ─────▶│                                                      │
+   plan       ─────▶│  VLM (HF Inference)   think → choose tools → args    │
    memory     ─────▶│                                                      │
    image      ─────▶└───────────────────────┬──────────────────────────────┘
-        ▲                                   │ move_to / grasp / measure / …
+        ▲                                   │ move_to / grasp / commit / …
         │                                   ▼
         │           ┌──────────── System 1 · simulation rate ──────────────┐
         └───────────┤  IK + trajectory controllers, MuJoCo physics,        │
@@ -19,7 +20,7 @@ result and goes again.
 
 ## Why it is built this way
 
-Four design choices are countermeasures to published failure modes, not preferences.
+Five design choices are countermeasures to published failure modes, not preferences.
 Each is marked in the code where it appears.
 
 **Proposed actions are verified before they execute.**
@@ -54,6 +55,38 @@ failures. Their own limitations section names the likely cause:
 
 That input is exactly what `state.py` supplies and what `SkillResult` measures, so this
 repo is a direct test of the question their paper leaves open.
+
+**The plan is written down, and its status is measured rather than claimed.**
+[EvoHarness-RL](https://arxiv.org/abs/2608.05446) (UIUC + Meta AI) splits an agent's
+external harness into three policy-facing roles — Belief, Progress, Experience — and
+ablates each away on a frozen Qwen3-8B:
+
+| | full BPE | w/o Belief | w/o Progress | w/o Experience |
+|---|---|---|---|---|
+| average | **56.4%** | 50.0% | 50.7% | 48.6% |
+| Pick2 (two dependent sub-goals) | **41.7%** | 37.5% | 37.5% | 41.7% |
+
+Two of the three already existed here — `state.py` is Belief, `memory.py` is Experience —
+and Progress did not exist at all. `progress.py` is that component: a bounded list of
+sub-goals the model writes with a single `commit`, re-rendered into context every step.
+Committing the next sub-goal closes the previous one, so the plan advances without a
+second verb.
+
+The status transitions are made by the loop, not the model. A sub-goal is marked blocked
+because a skill *actually* failed, with the simulator's own words attached:
+
+```
+=== PROGRESS (your committed plan) ===
+1. [done   ] find and pick up the red cube
+2. [blocked] carry it to the blue plate
+     blocked by: move_to -> FAILED: waypoint 2 outside workspace
+=== END PROGRESS ===
+```
+
+The held-out split here is mostly Pick2-shaped — `stack_red_on_green`, `both_on_plate`
+and `green_on_plate_keep_red` each need one sub-goal finished before the next means
+anything — so their numbers predict this is the component whose absence would cost most.
+`--no-progress` reproduces the ablation.
 
 **Memory lives outside the context window — and stays short.**
 [VISTA](https://vista-research.github.io/) notes that a VLM's native memory is the KV
@@ -114,8 +147,8 @@ identical dispatcher.
 
 Useful flags: `--privileged` enables `list_objects` (ground-truth poses — good for
 bootstrapping, bypasses vision, so keep it off when measuring), `--steps N`,
-`--image-window N`, `--no-grid`, `--randomize`, and `--no-verifier` to reproduce
-HumanCLAW's ablation on your own model.
+`--image-window N`, `--no-grid`, `--randomize`, and the two component ablations
+`--no-verifier` (HumanCLAW) and `--no-progress` (EvoHarness-RL).
 
 ## Evaluating a harness honestly
 
@@ -136,7 +169,8 @@ So `bench.py` builds in both controls:
 
 ```bash
 python scripts/bench.py --split test --seeds 3 --budget 3   # held-out, pass@1 vs pass@3
-python scripts/bench.py --split test --seeds 3 --no-verifier # the ablation
+python scripts/bench.py --split test --seeds 3 --no-verifier # ablate the verifier
+python scripts/bench.py --split test --seeds 3 --no-progress # ablate the plan
 ```
 
 `tasks.py` holds 8 tasks split 4 train / 4 test, disjoint, with seeded layout variation so
@@ -156,6 +190,7 @@ pass@k bought retries, not capability.
 | `redundant_rate` | repeat perception calls ÷ total calls (Act Wisely) |
 | `verifier_rejections` | proposals caught before execution, by tool |
 | `overclaim_rate` | attempts claiming success the world does not support |
+| `commits_per_episode` | how often the plan is rewritten (EvoHarness-RL's annealing rate) |
 
 An agent that calls `done(success=true)` having achieved nothing is a goal-detection
 failure, and it is only visible because the two fields are kept apart.
@@ -166,7 +201,7 @@ failure, and it is only visible because the two fields are kept apart.
 pytest
 ```
 
-56 tests, no API key needed — a scripted reasoner stands in for the model, so the loop
+71 tests, no API key needed — a scripted reasoner stands in for the model, so the loop
 (including the closing of it) is verified without touching a provider.
 
 ## Layout
@@ -176,9 +211,10 @@ pytest
 | `envs/mujoco_tabletop.py` | scene, physics, skills, measured outcomes |
 | `skills/ik.py` | damped least-squares IK, gripper held pointing down |
 | `perception/` | frame encoding, pixel grid overlay, crop/zoom |
-| `state.py` | the body-state block |
+| `state.py` | the body-state block (Belief) |
+| `progress.py` | the committed plan, status set by measured outcomes |
 | `verifier.py` | pre-execution checks on proposed calls |
-| `memory.py` | external lossless memory |
+| `memory.py` | external lossless memory (Experience) |
 | `reasoner/` | HF Inference client, `<think>` extraction, prompts |
 | `tools/` | schemas and dispatch |
 | `history.py` | message list with a bounded image window |

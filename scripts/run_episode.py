@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from embodied_agent.envs.mujoco_tabletop import TabletopEnv  # noqa: E402
 from embodied_agent.loop import run_episode  # noqa: E402
 from embodied_agent.memory import Memory  # noqa: E402
+from embodied_agent.progress import Progress  # noqa: E402
 from embodied_agent.reasoner.hf_chat import HFReasoner  # noqa: E402
 from embodied_agent.tools.builtin import build_registry  # noqa: E402
 from embodied_agent.trace import Trace  # noqa: E402
@@ -58,6 +59,11 @@ def main() -> int:
     parser.add_argument("--privileged", action="store_true", help="enable list_objects")
     parser.add_argument("--image-window", type=int, default=2)
     parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="drop the committed-plan block (ablation of arXiv 2608.05446 Progress)",
+    )
+    parser.add_argument(
         "--no-verifier",
         action="store_true",
         help="disable pre-execution checks (an ablation, not a normal setting)",
@@ -70,7 +76,10 @@ def main() -> int:
 
     env = TabletopEnv(seed=args.seed)
     memory = Memory()
-    registry = build_registry(env, memory, allow_privileged=args.privileged)
+    progress = None if args.no_progress else Progress()
+    registry = build_registry(
+        env, memory, progress=progress, allow_privileged=args.privileged
+    )
     reasoner = HFReasoner(
         model=args.model,
         provider=args.provider,
@@ -99,6 +108,7 @@ def main() -> int:
             json_mode=args.json_mode,
             success_check=cube_on_plate,
             verifier=None if args.no_verifier else PreconditionVerifier(env),
+            progress=progress,
         )
     finally:
         env.close()

@@ -40,6 +40,9 @@ def main() -> int:
     parser.add_argument("--provider", default=os.environ.get("HF_PROVIDER"))
     parser.add_argument("--json-mode", action="store_true")
     parser.add_argument("--no-verifier", action="store_true", help="ablate the verifier")
+    parser.add_argument(
+        "--no-progress", action="store_true", help="ablate Progress (arXiv 2608.05446)"
+    )
     parser.add_argument("--privileged", action="store_true")
     parser.add_argument("--image-window", type=int, default=2)
     parser.add_argument("--out", default=None, help="where to write the report JSON")
@@ -59,7 +62,8 @@ def main() -> int:
     probe = factory()
     print(f"model:    {probe.model} ({probe.mode})")
     print(f"split:    {args.split} -- {len(tasks)} tasks x {len(seeds)} seeds x {args.budget} attempts")
-    print(f"verifier: {'off (ablation)' if args.no_verifier else 'on'}\n")
+    print(f"verifier: {'off (ablation)' if args.no_verifier else 'on'}")
+    print(f"progress: {'off (ablation)' if args.no_progress else 'on'}\n")
 
     report = run_benchmark(
         tasks,
@@ -67,6 +71,7 @@ def main() -> int:
         seeds=seeds,
         budget=args.budget,
         use_verifier=not args.no_verifier,
+        use_progress=not args.no_progress,
         max_steps=args.steps,
         image_window=args.image_window,
         json_mode=args.json_mode,
