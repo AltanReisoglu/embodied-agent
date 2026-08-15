@@ -178,6 +178,59 @@ a policy cannot pass on memorised coordinates. Every number is reported per spli
 pass@1 always sits next to pass@k at the same budget: a change that moves pass@1 but not
 pass@k bought retries, not capability.
 
+## Training against it
+
+The model behind `HFReasoner` is frozen — an inference API has no weights to update — so
+RL here means having the environment side correct and ablatable first. `rl/` is that side,
+and none of it needs a GPU:
+
+```bash
+python scripts/collect_rollouts.py --split train --seeds 2 --group 8
+```
+
+GRPO itself is commodity; slime, prime-rl, verl and TRL all implement it. What is specific
+to this problem is the reward, and a reward bug is invisible in aggregate metrics and
+expensive to find on rented hardware. So `rl/reward.py` is EvoHarness-RL's
+
+    R(t) = R_succ + l_eff·R_eff + l_div(u)·R_div − l_spam·R_spam − l_inv·R_inv
+
+and `tests/test_reward.py` is the ordering it has to produce, asserted against scripted
+policies:
+
+| policy | reward |
+|---|---|
+| solves in 7 steps, varied actions | **+10.81** |
+| solves in 15 steps | +10.06 |
+| fails after trying 15 steps | +0.22 |
+| gives up on step 1 | +0.06 |
+| spams redundant perception ×15 | −0.94 |
+| proposes 15 impossible actions | −1.44 |
+| claims success on step 1, having done nothing | **−1.94** |
+
+Two terms depart from the paper, both for the same reason: in ALFWorld the environment
+ends an episode, while here `done` is an action the *policy* chooses, so trivially short
+trajectories are reachable and their formula has two holes ours has to close.
+
+`overclaim` is the first. Trained only on verified success, calling `done(success=true)`
+early is free — it ends the episode and dodges every penalty. That is precisely the
+goal-detection failure this repo measures, so it is priced.
+
+The second was a bug the table above caught. Their `R_div = |{verb(a)}| / |t|` rewards
+breadth, but dividing by length also rewards brevity: a one-step give-up scores a perfect
+1.0 ratio, and quitting immediately outscored fifteen honest steps — a policy trained on
+that converges to doing nothing. Dividing by the size of the tool vocabulary instead
+measures the breadth the term was for, and is length-neutral.
+
+`R_succ` reads `verified_success`, never `agent_claimed_success`. Reading the claim would
+train the policy to lie and would look fine in every aggregate.
+
+Before renting a GPU, the number to look at is `collapse_rate`. GRPO normalises reward
+within a group of rollouts of the same problem, so a group where every rollout scores
+alike yields zero advantage and no gradient — a task nobody solves teaches exactly as
+little as one everybody solves. `dataset_report` reports how many groups are actually
+learnable, which is a property of the task mix and the sampling temperature, not of the
+trainer.
+
 ## What is measured
 
 `runs/<ts>/summary.json` separates what the agent *claimed* from what the world *shows*:
@@ -201,7 +254,7 @@ failure, and it is only visible because the two fields are kept apart.
 pytest
 ```
 
-71 tests, no API key needed — a scripted reasoner stands in for the model, so the loop
+96 tests, no API key needed — a scripted reasoner stands in for the model, so the loop
 (including the closing of it) is verified without touching a provider.
 
 ## Layout
@@ -222,6 +275,8 @@ pytest
 | `trace.py` | recording and metrics |
 | `tasks.py` | task family with a held-out split |
 | `bench.py` | benchmark runner, pass@1 vs pass@k |
+| `rl/reward.py` | trajectory reward and GRPO group advantages |
+| `rl/rollout.py` | rollout groups, collapse diagnostics, export |
 
 ## Notes on the API
 

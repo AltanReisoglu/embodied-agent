@@ -186,6 +186,9 @@ def run_episode(
         # EvoHarness-RL's harness annealing: after training their agent settles at about
         # one harness call per episode. We cannot train, but we can measure the rate.
         "progress_commits": progress.commits if progress is not None else 0,
+        # The denominator of the RL diversity term: how wide the action vocabulary was on
+        # this episode, which changes when a component is ablated away.
+        "available_tools": len(registry.available()),
     }
     if trace:
         summary = trace.finish(
