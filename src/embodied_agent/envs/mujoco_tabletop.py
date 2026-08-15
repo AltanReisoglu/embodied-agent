@@ -1,12 +1,31 @@
-"""MuJoCo tabletop environment: a 5-DOF arm, a gripper, cubes and a plate.
+"""MuJoCo tabletop environment: an arm, a gripper, cubes and a plate.
 
 Everything the agent is told about its own body comes from here, measured after the
 physics has run -- never predicted.
+
+Two robots are available.
+
+`toy` is the hand-written five-joint arm, and it is the default because it is the one
+that completes a pick-and-place end to end.
+
+`panda` is the Franka Emika Panda from mujoco_menagerie, vendored by
+scripts/vendor_panda.py. Its kinematics are strictly better -- seven joints, so IK
+satisfies position *and* approach direction instead of trading one against the other,
+solving nine of nine workspace targets to under 5mm with near-zero orientation error
+where the toy arm reaches 3mm at the edge of its range and cannot honour orientation at
+all. What it does not yet do is carry. The grip holds a cube through a 7.5cm lift and
+loses it by 11.5cm, with the fingers never opening -- the cube slides out from between
+them. Raising pad friction to the toy arm's values, holding at the achieved width rather
+than commanding fully closed, subdividing the motion, and biasing IK toward the previous
+configuration were each tried; the first two helped, the last two made it worse. So the
+Panda is selectable and honest about what it can do, and it is not the default until it
+can carry.
 """
 
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -24,16 +43,61 @@ from embodied_agent.skills.ik import (  # noqa: E402
     yaw_down_quat,
 )
 
-ASSET = Path(__file__).resolve().parent.parent / "assets" / "tabletop.xml"
-
-GRIPPER_OPEN = 0.04
-GRIPPER_CLOSED = 0.0
+ASSETS = Path(__file__).resolve().parent.parent / "assets"
 
 #: Geoms that belong to the arm itself; contact between two of these is self-collision
 #: and contact with anything else during a move is a report-worthy event.
-ARM_GEOM_PREFIXES = ("link", "wrist", "base")
-FINGER_GEOMS = ("fingerpad_left", "fingerpad_right")
+ARM_GEOM_PREFIXES = ("link", "wrist", "base", "hand", "finger")
 MANIPULABLE = ("red_cube", "green_cube", "blue_plate")
+
+
+@dataclass(frozen=True)
+class RobotSpec:
+    """Everything about a scene that is robot-specific, in one place.
+
+    The alternative is names scattered through the environment as string literals, which
+    is how `skills/ik.py` ended up silently solving over five of the Panda's seven joints.
+    """
+
+    scene: str
+    #: Site the IK solver drives, between the fingertips.
+    site: str
+    gripper_actuator: str
+    #: Slide joint whose position *is* the opening, in metres.
+    finger_joint: str
+    gripper_open: float
+    gripper_closed: float
+    #: Contact labels for the two fingertips. `_geom_label` falls back to the body name,
+    #: which is what the Panda's unnamed pad geoms resolve to.
+    finger_geoms: tuple[str, str]
+    #: Above this opening the gripper is not holding anything, whatever it touches.
+    open_threshold: float = 0.035
+    #: Finger travel in metres, i.e. what `gripper_opening` reads when fully open. The
+    #: command space is not always metres, so the two are kept apart.
+    open_span: float = 0.04
+
+
+ROBOTS = {
+    "panda": RobotSpec(
+        scene="tabletop_panda.xml",
+        site="grasp",
+        gripper_actuator="actuator8",
+        finger_joint="finger_joint1",
+        # The Franka hand is commanded 0-255, not in metres.
+        gripper_open=255.0,
+        gripper_closed=0.0,
+        finger_geoms=("left_finger", "right_finger"),
+    ),
+    "toy": RobotSpec(
+        scene="tabletop.xml",
+        site="ee_site",
+        gripper_actuator="gripper",
+        finger_joint="finger_left",
+        gripper_open=0.04,
+        gripper_closed=0.0,
+        finger_geoms=("fingerpad_left", "fingerpad_right"),
+    ),
+}
 
 
 class TabletopEnv:
@@ -43,21 +107,27 @@ class TabletopEnv:
         image_size: tuple[int, int] = (480, 640),
         default_camera: str = "front",
         seed: int | None = None,
+        robot: str = "toy",
     ) -> None:
-        self.model = mujoco.MjModel.from_xml_path(str(ASSET))
+        if robot not in ROBOTS:
+            raise ValueError(f"unknown robot {robot!r}; expected one of {sorted(ROBOTS)}")
+        self.robot = ROBOTS[robot]
+        self.robot_name = robot
+        self.model = mujoco.MjModel.from_xml_path(str(ASSETS / self.robot.scene))
         self.data = mujoco.MjData(self.model)
         self.height, self.width = image_size
         self.default_camera = default_camera
         self.rng = np.random.default_rng(seed)
 
         self._renderer = mujoco.Renderer(self.model, self.height, self.width)
-        self._site_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, "ee_site")
+        self._site_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, self.robot.site)
         self._arm_qpos = arm_qpos_indices(self.model)
+        self._n_arm = len(self._arm_qpos)
         self._gripper_actuator = mujoco.mj_name2id(
-            self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, "gripper"
+            self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, self.robot.gripper_actuator
         )
         self._finger_qpos = self.model.jnt_qposadr[
-            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "finger_left")
+            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, self.robot.finger_joint)
         ]
 
         self.step_count = 0
@@ -113,13 +183,13 @@ class TabletopEnv:
 
     def held_object(self) -> str | None:
         """An object is held when both finger pads touch it and the gripper is not open."""
-        if self.gripper_opening > 0.035:
+        if self.gripper_opening > self.robot.open_threshold:
             return None
         touching: dict[str, set[str]] = {}
         for pad, other in self._contact_pairs():
-            if pad in FINGER_GEOMS and other in MANIPULABLE:
+            if pad in self.robot.finger_geoms and other in MANIPULABLE:
                 touching.setdefault(other, set()).add(pad)
-            elif other in FINGER_GEOMS and pad in MANIPULABLE:
+            elif other in self.robot.finger_geoms and pad in MANIPULABLE:
                 touching.setdefault(pad, set()).add(other)
         for obj, pads in touching.items():
             if len(pads) == 2:
@@ -305,7 +375,7 @@ class TabletopEnv:
 
     def grasp(self) -> SkillResult:
         self.step_count += 1
-        self.data.ctrl[self._gripper_actuator] = GRIPPER_CLOSED
+        self.data.ctrl[self._gripper_actuator] = self.robot.gripper_closed
         self._advance(seconds=1.0)
         self._settle(steps=100)
         held = self.held_object()
@@ -327,7 +397,7 @@ class TabletopEnv:
     def release(self) -> SkillResult:
         self.step_count += 1
         was_holding = self.held_object()
-        self.data.ctrl[self._gripper_actuator] = GRIPPER_OPEN
+        self.data.ctrl[self._gripper_actuator] = self.robot.gripper_open
         self._advance(seconds=1.0)
         self._settle(steps=200)
         detail = {"released": was_holding, "holding": self.held_object()}
@@ -346,11 +416,11 @@ class TabletopEnv:
     def _ramp_to(self, arm_target: np.ndarray, seconds: float) -> set[str]:
         """Interpolate the position targets so the arm sweeps rather than teleports."""
         n_steps = max(1, int(seconds / self.model.opt.timestep))
-        start = self.data.ctrl[:5].copy()
+        start = self.data.ctrl[: self._n_arm].copy()
         collisions: set[str] = set()
         for i in range(n_steps):
             alpha = (i + 1) / n_steps
-            self.data.ctrl[:5] = start + alpha * (arm_target - start)
+            self.data.ctrl[: self._n_arm] = start + alpha * (arm_target - start)
             mujoco.mj_step(self.model, self.data)
             if i % 25 == 0:
                 collisions |= set(self._unexpected_arm_contacts())

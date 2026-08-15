@@ -1,9 +1,15 @@
 """Damped least-squares inverse kinematics for the tabletop arm.
 
-The arm has five hinge joints, so it cannot reach an arbitrary 6-DOF pose. We solve a
-weighted 6-DOF task (position weighted far above orientation) and let the damped
-pseudo-inverse settle on the least-squares compromise, which in practice keeps the
-gripper close to the requested approach direction while hitting the position exactly.
+We solve a weighted 6-DOF task (position weighted far above orientation) and let the
+damped pseudo-inverse settle on the least-squares compromise, which keeps the gripper
+close to the requested approach direction while hitting the position exactly. On an arm
+with fewer than six joints that compromise is the whole point; on a redundant arm the
+damping picks a well-conditioned solution out of the null space.
+
+Which joints those are is read from the model rather than hardcoded. It used to be a
+fixed tuple of five names, which silently solved over five of the Panda's seven joints
+when the arm was swapped -- every target came back "unreachable" by 3 to 9cm with the
+solver never touching two of the joints it had available.
 """
 
 from __future__ import annotations
@@ -13,12 +19,22 @@ from dataclasses import dataclass
 import mujoco
 import numpy as np
 
-ARM_JOINT_NAMES = ("joint1", "joint2", "joint3", "joint4", "joint5")
-
-#: Gripper fingers extend along the wrist's +z axis, so pointing them straight down
-#: means rotating the wrist frame 180 degrees about x. In (w, x, y, z) order that is
-#: (0, 1, 0, 0).
+#: The fingers extend along the wrist's +z axis, so pointing them straight down means
+#: rotating the wrist frame 180 degrees about x: (w, x, y, z) = (0, 1, 0, 0).
 GRIPPER_DOWN_QUAT = np.array([0.0, 1.0, 0.0, 0.0])
+
+
+def arm_joint_names(model: mujoco.MjModel) -> tuple[str, ...]:
+    """Every hinge joint in the model, in model order.
+
+    Gripper fingers are slide joints and object free joints are free joints, so on both
+    scenes here this is exactly the arm: five on the hand-written one, seven on the Panda.
+    """
+    return tuple(
+        mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, j)
+        for j in range(model.njnt)
+        if model.jnt_type[j] == mujoco.mjtJoint.mjJNT_HINGE
+    )
 
 
 @dataclass(frozen=True)
@@ -34,7 +50,7 @@ def arm_dof_indices(model: mujoco.MjModel) -> np.ndarray:
     return np.array(
         [
             model.jnt_dofadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)]
-            for name in ARM_JOINT_NAMES
+            for name in arm_joint_names(model)
         ]
     )
 
@@ -43,13 +59,13 @@ def arm_qpos_indices(model: mujoco.MjModel) -> np.ndarray:
     return np.array(
         [
             model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)]
-            for name in ARM_JOINT_NAMES
+            for name in arm_joint_names(model)
         ]
     )
 
 
 def arm_joint_limits(model: mujoco.MjModel) -> tuple[np.ndarray, np.ndarray]:
-    ids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, n) for n in ARM_JOINT_NAMES]
+    ids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, n) for n in arm_joint_names(model)]
     ranges = model.jnt_range[ids]
     return ranges[:, 0].copy(), ranges[:, 1].copy()
 
@@ -80,7 +96,7 @@ def solve_ik(
 
     Runs on a scratch copy of `data` so the live simulation state is untouched. The
     returned qpos is clipped to the joint limits; `success` reflects the position
-    tolerance only, since orientation is a soft objective on this 5-DOF arm.
+    tolerance only, since orientation is a soft objective.
     """
     target_pos = np.asarray(target_pos, dtype=float)
     if target_quat is None:

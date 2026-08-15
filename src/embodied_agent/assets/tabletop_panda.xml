@@ -1,0 +1,69 @@
+<mujoco model="tabletop_panda">
+  <compiler angle="radian" autolimits="true" meshdir="panda/assets"/>
+  <option timestep="0.002" integrator="implicitfast"/>
+
+  <!-- The Franka Panda from mujoco_menagerie, collision geometry only. Vendored by
+       scripts/vendor_panda.py; see that file for why. Replaces a hand-written arm whose
+       kinematics were the source of three separate bugs. -->
+  <include file="panda/panda.xml"/>
+
+  <visual>
+    <global offwidth="640" offheight="480"/>
+    <headlight ambient="0.4 0.4 0.4" diffuse="0.7 0.7 0.7"/>
+    <quality shadowsize="2048"/>
+  </visual>
+
+  <asset>
+    <texture name="grid" type="2d" builtin="checker" rgb1="0.20 0.25 0.30" rgb2="0.25 0.30 0.35"
+             width="300" height="300"/>
+    <material name="grid" texture="grid" texrepeat="6 6" reflectance="0.05"/>
+    <material name="table" rgba="0.72 0.62 0.48 1"/>
+  </asset>
+
+  <default>
+    <default class="object">
+      <geom mass="0.05" friction="1.5 0.1 0.01" solimp="0.97 0.995 0.001"/>
+    </default>
+  </default>
+
+  <worldbody>
+    <light pos="0.3 -0.4 1.9" dir="-0.2 0.3 -1" diffuse="0.8 0.8 0.8"/>
+    <geom name="floor" type="plane" size="3 3 0.05" material="grid"/>
+
+    <!-- Surface at z=0.40, matching the workspace the task family is written against. -->
+    <geom name="table" type="box" size="0.60 0.60 0.20" pos="0 0.15 0.20" material="table"/>
+
+    <!-- Near-overhead, aimed at the workspace centre. A head-on view puts the arm
+         between the lens and the objects; the Panda is bulkier than what came before,
+         so this matters more, not less. -->
+    <camera name="front" pos="0 0.02 1.42" xyaxes="1 0 0  0 0.966 0.259" fovy="52"/>
+
+    <body name="red_cube" pos="0.13 0.18 0.42">
+      <freejoint name="red_cube"/>
+      <geom class="object" name="red_cube" type="box" size="0.02 0.02 0.02" rgba="0.85 0.15 0.12 1"/>
+    </body>
+
+    <body name="green_cube" pos="-0.16 0.26 0.42">
+      <freejoint name="green_cube"/>
+      <geom class="object" name="green_cube" type="box" size="0.02 0.02 0.02" rgba="0.20 0.70 0.25 1"/>
+    </body>
+
+    <body name="blue_plate" pos="-0.02 0.30 0.408">
+      <freejoint name="blue_plate"/>
+      <geom class="object" name="blue_plate" type="cylinder" size="0.06 0.008"
+            rgba="0.20 0.35 0.85 1" mass="0.3"/>
+    </body>
+  </worldbody>
+
+  <!-- The arm is bolted to the near edge of the table, which is how a Franka is usually
+       mounted for tabletop manipulation. Objects sit 0.45-0.65m out: comfortably inside
+       the 0.855m reach, and far enough that joint limits stay off the solver's path. -->
+  <keyframe>
+    <key name="home"
+         qpos="1.5708 -0.35 0 -2.20 0 1.90 0.785  0.04 0.04
+               0.13 0.18 0.42 1 0 0 0
+               -0.16 0.26 0.42 1 0 0 0
+               -0.02 0.30 0.408 1 0 0 0"
+         ctrl="1.5708 -0.35 0 -2.20 0 1.90 0.785  255"/>
+  </keyframe>
+</mujoco>
